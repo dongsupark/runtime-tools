@@ -83,7 +83,7 @@ func checkNamespacePath(unsharePid int, ns string) error {
 		}
 
 		if testNsInode == unshareNsInode {
-			errNsPath = fmt.Errorf("expected: %q, found: %q", testNsInode, unshareNsInode)
+			errNsPath = fmt.Errorf("testNsInode == %v, unshareNsInode == %v", testNsInode, unshareNsInode)
 			return errNsPath
 		}
 
@@ -114,6 +114,9 @@ func checkNamespacePath(unsharePid int, ns string) error {
 	if ns == "user" {
 		g.AddLinuxUIDMapping(uint32(1000), uint32(0), uint32(1000))
 		g.AddLinuxGIDMapping(uint32(1000), uint32(0), uint32(1000))
+
+		// runc cannot mount /dev/pts by default inside user namespaces
+		g.RemoveMount("/dev/pts")
 	}
 
 	return util.RuntimeOutsideValidate(g, func(config *rspec.Spec, state *rspec.State) error {
@@ -123,18 +126,25 @@ func checkNamespacePath(unsharePid int, ns string) error {
 			out, err2 := exec.Command("sh", "-c", fmt.Sprintf("ls -la /proc/%d/ns/", state.Pid)).CombinedOutput()
 			return fmt.Errorf("cannot read namespace link for the container process: %s\n%v\n%v", err, err2, out)
 		}
-		if containerNsInode != unshareNsInode {
-			return fmt.Errorf("expected: %q, found: %q", unshareNsInode, containerNsInode)
+		if testNsInode == containerNsInode {
+			return fmt.Errorf("testNsInode == %v, containerNsInode == %v", testNsInode, containerNsInode)
 		}
 		return nil
 	})
 }
 
-func testNamespacePath(t *tap.T, ns string, unshareOpt string) error {
+func testNamespacePath(t *tap.T, ns string, unshareOpts ...string) error {
 	// Calling 'unshare' (part of util-linux) is easier than doing it from
 	// Golang: mnt namespaces cannot be unshared from multithreaded
 	// programs.
-	cmd := exec.Command("unshare", unshareOpt, "--fork", "sleep", "10000")
+	cmdArgs := []string{}
+	cmdArgs = append(cmdArgs, "--fork")
+	for _, o := range unshareOpts {
+		cmdArgs = append(cmdArgs, o)
+	}
+	cmdArgs = append(cmdArgs, "sleep", "10000")
+
+	cmd := exec.Command("/usr/bin/unshare", cmdArgs...)
 	// We shoud set Setpgid to true, to be able to allow the unshare process
 	// as well as its child processes to be killed by a single kill command.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -164,16 +174,16 @@ func main() {
 	// a PR for runc to support cgroup namespaces,
 	// https://github.com/opencontainers/runc/pull/1184, has not been merged.
 	cases := []struct {
-		name       string
-		unshareOpt string
+		name        string
+		unshareOpts []string
 	}{
-		{"cgroup", "--cgroup"},
-		{"ipc", "--ipc"},
-		{"mnt", "--mount"},
-		{"net", "--net"},
-		{"pid", "--pid"},
-		{"user", "--user"},
-		{"uts", "--uts"},
+		{"cgroup", []string{"--cgroup"}},
+		{"ipc", []string{"--ipc"}},
+		{"mnt", []string{"--mount"}},
+		{"net", []string{"--net"}},
+		{"pid", []string{"--pid"}},
+		{"user", []string{"--user", "--map-root-user", "--mount"}},
+		{"uts", []string{"--uts"}},
 	}
 
 	for _, c := range cases {
@@ -181,7 +191,7 @@ func main() {
 			t.Skip(1, fmt.Sprintf("linux-specific namespace test: %s", c))
 		}
 
-		err := testNamespacePath(t, c.name, c.unshareOpt)
+		err := testNamespacePath(t, c.name, c.unshareOpts...)
 		t.Ok(err == nil, fmt.Sprintf("set %s namespace by path", c.name))
 		if err != nil {
 			rfcError, errRfc := specerror.NewRFCError(specerror.NSProcInPath, err, rspec.Version)
