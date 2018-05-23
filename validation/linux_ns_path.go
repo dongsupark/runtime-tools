@@ -111,10 +111,10 @@ func checkNamespacePath(unsharePid int, ns string) error {
 	// existing userns. Anyway in reality, we should set up uid/gid
 	// mappings, to make userns work in most runtimes.
 	// See https://github.com/opencontainers/runtime-spec/issues/961
-	//         if ns == "user" {
-	//             g.AddLinuxUIDMapping(uint32(1000), uint32(0), uint32(1000))
-	//             g.AddLinuxGIDMapping(uint32(1000), uint32(0), uint32(1000))
-	//         }
+	if ns == "user" {
+		g.AddLinuxUIDMapping(uint32(1000), uint32(0), uint32(1000))
+		g.AddLinuxGIDMapping(uint32(1000), uint32(0), uint32(1000))
+	}
 
 	return util.RuntimeOutsideValidate(g, func(config *rspec.Spec, state *rspec.State) error {
 		containerNsPath := fmt.Sprintf("/proc/%d/ns/%s", state.Pid, ns)
@@ -160,6 +160,9 @@ func main() {
 	t := tap.New()
 	t.Header(0)
 
+	// NOTE: cgroup namespaces test will fail when testing with runc, because
+	// a PR for runc to support cgroup namespaces,
+	// https://github.com/opencontainers/runc/pull/1184, has not been merged.
 	cases := []struct {
 		name       string
 		unshareOpt string
